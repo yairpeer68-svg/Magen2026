@@ -1,0 +1,163 @@
+name: Magen Android CI
+
+# בנייה + בדיקות אוטומטיות. תופס רגרסיות (כמו הבאגים שתוקנו) לפני שהן מגיעות
+# למכשיר, ומחליף את הבנייה הידנית ב-Windows עבור בדיקות רגילות.
+#
+# הנחת מבנה: פרויקט ה-Gradle יושב בשורש הריפו (build.gradle, gradlew, app/).
+# אם תשים אותו בתת-תיקייה (למשל magen-android/), עדכן:
+#   • working-directory בכל שלב gradle,
+#   • את ה-paths של upload-artifact,
+#   • ואפשר להוסיף  paths: [ "magen-android/**" ]  ל-on.push.
+
+on:
+  push:
+    branches: [ "main", "master", "develop", "claude/**" ]
+    tags: [ "v*" ]
+  pull_request:
+  workflow_dispatch:
+
+# מבטל ריצות ישנות על אותו ענף כשדוחפים commit חדש.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ── שער מהיר: הבדיקן המבני של הפרויקט (Python טהור, בלי Android SDK) ──
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run verify.py --strict
+        run: python3 verify.py --strict
+
+  # ── בנייה + בדיקות יחידה (JVM) + APK ל-debug ──
+  build:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install required SDK packages
+        run: |
+          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: gradle-
+
+      - name: Unit tests (debug)
+        run: ./gradlew testDebugUnitTest --no-daemon --stacktrace
+
+      - name: Lint debug
+        run: ./gradlew lintDebug --no-daemon --stacktrace
+
+      - name: Assemble debug APK
+        run: ./gradlew assembleDebug --no-daemon --stacktrace -PbuildId=${{ github.sha }}
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: magen-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 14
+
+      - name: Upload unit-test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-reports
+          path: app/build/reports/tests/**
+          retention-days: 7
+
+  # ── בנייית RELEASE חתומה — רצה רק על תג v* וכשה-Secrets מוגדרים ──
+  # דורש ב-Settings → Secrets → Actions:
+  #   MAGEN_KEYSTORE_BASE64, MAGEN_KEYSTORE_PASSWORD, MAGEN_KEY_ALIAS,
+  #   MAGEN_KEY_PASSWORD, MAGEN_RELEASE_CERT_SHA256, MAGEN_VISUAL_MODEL_SHA256,
+  #   MAGEN_UPDATE_PUBKEY_B64 (and optionally MAGEN_UPDATE_NEXT_PUBKEY_B64)
+  release:
+    needs: [verify, build]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+      - name: Install required SDK packages
+        run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+      - name: Decode keystore
+        env:
+          KS_B64: ${{ secrets.MAGEN_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KS_B64" ]; then echo "release secrets not set — skipping"; exit 1; fi
+          echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/magen-release.jks"
+      - name: Provision pinned Visual AI model
+        env:
+          EXPECTED_MODEL_SHA256: ${{ secrets.MAGEN_VISUAL_MODEL_SHA256 }}
+        run: |
+          set -euo pipefail
+          test "$EXPECTED_MODEL_SHA256" != "" || { echo "MAGEN_VISUAL_MODEL_SHA256 secret is required"; exit 1; }
+          echo "$EXPECTED_MODEL_SHA256" | grep -Eq '^[0-9A-Fa-f]{64}$' || { echo "invalid model SHA-256"; exit 1; }
+          curl -fL --retry 3 -o "$RUNNER_TEMP/nsfw.zip" \
+            https://github.com/GantMan/nsfw_model/releases/download/1.1.0/nsfw_mobilenet_v2_140_224.zip
+          mkdir -p "$RUNNER_TEMP/nsfw-unpack" app/src/main/assets
+          unzip -q "$RUNNER_TEMP/nsfw.zip" -d "$RUNNER_TEMP/nsfw-unpack"
+          MODEL_PATH="$(find "$RUNNER_TEMP/nsfw-unpack" -type f -name saved_model.tflite -print -quit)"
+          test -n "$MODEL_PATH" || { echo "saved_model.tflite missing"; exit 1; }
+          ACTUAL="$(sha256sum "$MODEL_PATH" | awk '{print $1}')"
+          test "${ACTUAL,,}" = "${EXPECTED_MODEL_SHA256,,}" || { echo "model SHA-256 mismatch"; exit 1; }
+          cp "$MODEL_PATH" app/src/main/assets/nsfw_mobilenet_v2_140_224.tflite
+      - name: Assemble signed release
+        env:
+          MAGEN_KEYSTORE_FILE: ${{ runner.temp }}/magen-release.jks
+          MAGEN_KEYSTORE_PASSWORD: ${{ secrets.MAGEN_KEYSTORE_PASSWORD }}
+          MAGEN_KEY_ALIAS: ${{ secrets.MAGEN_KEY_ALIAS }}
+          MAGEN_KEY_PASSWORD: ${{ secrets.MAGEN_KEY_PASSWORD }}
+          MAGEN_RELEASE_CERT_SHA256: ${{ secrets.MAGEN_RELEASE_CERT_SHA256 }}
+          MAGEN_VISUAL_MODEL_SHA256: ${{ secrets.MAGEN_VISUAL_MODEL_SHA256 }}
+          MAGEN_UPDATE_PUBKEY_B64: ${{ secrets.MAGEN_UPDATE_PUBKEY_B64 }}
+          MAGEN_UPDATE_NEXT_PUBKEY_B64: ${{ secrets.MAGEN_UPDATE_NEXT_PUBKEY_B64 }}
+        run: ./gradlew testReleaseUnitTest assembleRelease --no-daemon --stacktrace -PbuildId=${{ github.sha }}
+      - name: Verify release APK signature
+        env:
+          EXPECTED_CERT_SHA256: ${{ secrets.MAGEN_RELEASE_CERT_SHA256 }}
+        run: |
+          set -euo pipefail
+          APK=app/build/outputs/apk/release/app-release.apk
+          APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          test -x "$APKSIGNER" || { echo "apksigner not found: $APKSIGNER"; exit 1; }
+          "$APKSIGNER" verify --verbose --print-certs "$APK"
+          ACTUAL="$("$APKSIGNER" verify --print-certs "$APK" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -1 | tr -d ':[:space:]' | tr 'A-F' 'a-f')"
+          EXPECTED="$(printf '%s' "$EXPECTED_CERT_SHA256" | tr -d ':[:space:]' | tr 'A-F' 'a-f')"
+          test -n "$ACTUAL" && test "$ACTUAL" = "$EXPECTED" || { echo "APK signer fingerprint mismatch"; exit 1; }
+      - name: Upload release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: magen-release-apk
+          path: app/build/outputs/apk/release/app-release.apk
+          retention-days: 30

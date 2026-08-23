@@ -1,0 +1,14 @@
+Visual model source: GantMan/nsfw_model, release 1.1.0
+Model archive: nsfw_mobilenet_v2_140_224.zip
+Runtime model expected inside archive: saved_model.tflite (224x224 RGB float, five classes)
+Upstream repository license: MIT. The full notice is included in app/src/main/assets/THIRD_PARTY_VISUAL_MODEL_LICENSE.txt and therefore packaged with the APK.
+
+Supply-chain behavior in BUILD_APK_ON_WINDOWS.ps1:
+1. Downloads only the fixed upstream GitHub release 1.1.0.
+2. Queries GitHub release metadata and verifies the archive SHA-256 when GitHub exposes an asset digest.
+3. Computes SHA-256 of the extracted TFLite model. If a repository VISUAL_MODEL_SHA256.lock exists, the model must match it exactly.
+4. On the first production bootstrap, if GitHub exposes no asset digest, MAGEN_VISUAL_MODEL_SHA256 must be supplied from an independently audited copy; otherwise the build fails closed.
+5. A successfully verified first bootstrap writes VISUAL_MODEL_SHA256.lock and instructs the maintainer to commit it, making later builds reproducible.
+6. The verified model hash is injected into BuildConfig; Android verifies the model again before loading it.
+
+There is no trust-on-first-use fallback and no mirror-consensus shortcut in v4.7.1.

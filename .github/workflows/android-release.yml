@@ -1,0 +1,174 @@
+name: Magen Signed Release APK
+
+# בונה APK חתום ל-RELEASE ב-GitHub (SDK + רשת מלאים).
+# הפעלה: לשונית Actions → "Magen Signed Release APK" → Run workflow (או push של תג v*).
+#
+# מפתח החתימה:
+#   • בנייה ראשונה בלי סודות → נוצר מפתח release חדש (EC P-256), נחתם איתו,
+#     והמפתח + הסיסמאות עולים כ-artifact נפרד "SIGNING-KEYSTORE-BACKUP".
+#     ⚠️ הורד אותו, גבֵּה במקום בטוח, ואז העבר אותו ל-Secrets (למטה) ומחק את ה-artifact.
+#   • בנייה חוזרת → הגדר Secrets: MAGEN_KEYSTORE_BASE64, MAGEN_KEYSTORE_PASSWORD,
+#     MAGEN_KEY_ALIAS, MAGEN_KEY_PASSWORD — והמפתח הקבוע שלך ישמש (אותה חתימה = עדכונים תקינים).
+
+on:
+  workflow_dispatch:
+  push:
+    tags: [ "v*" ]
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK packages
+        run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Strict source verifier
+        run: python3 verify.py --strict
+
+      # ── Visual AI model (required for release) ──
+      - name: Fetch + pin Visual AI model
+        run: |
+          set -euo pipefail
+          MODEL_DIR="app/src/main/assets"
+          MODEL="$MODEL_DIR/nsfw_mobilenet_v2_140_224.tflite"
+          mkdir -p "$MODEL_DIR"
+          URL="https://github.com/GantMan/nsfw_model/releases/download/1.1.0/nsfw_mobilenet_v2_140_224.zip"
+          echo "Downloading model archive..."
+          curl -fsSL "$URL" -o /tmp/nsfw.zip
+          ARCHIVE_SHA=$(sha256sum /tmp/nsfw.zip | cut -d' ' -f1)
+          # Best-effort: verify against the GitHub-published asset digest (jq is preinstalled).
+          EXPECTED=$(curl -fsSL -H "User-Agent: MagenBuilder" \
+            "https://api.github.com/repos/GantMan/nsfw_model/releases/tags/1.1.0" \
+            | jq -r '(.assets[]? | select(.name=="nsfw_mobilenet_v2_140_224.zip") | .digest) // ""' \
+            | sed 's/^sha256://' || echo "")
+          if [ -n "$EXPECTED" ]; then
+            if [ "$ARCHIVE_SHA" != "$EXPECTED" ]; then
+              echo "Archive digest mismatch: expected $EXPECTED got $ARCHIVE_SHA"; exit 1
+            fi
+            echo "GitHub-published archive digest verified."
+          else
+            echo "::warning::GitHub asset digest unavailable; proceeding with downloaded archive."
+          fi
+          unzip -o -q /tmp/nsfw.zip -d /tmp/nsfw_unpack
+          SRC=$(find /tmp/nsfw_unpack -name saved_model.tflite | head -1)
+          [ -n "$SRC" ] || { echo "saved_model.tflite not found in archive"; exit 1; }
+          cp -f "$SRC" "$MODEL"
+          MODEL_SHA=$(sha256sum "$MODEL" | cut -d' ' -f1)
+          echo "$MODEL_SHA" > VISUAL_MODEL_SHA256.lock
+          echo "MODEL_SHA=$MODEL_SHA" >> "$GITHUB_ENV"
+          echo "Model pinned: $MODEL_SHA"
+
+      # ── release signing key ──
+      - name: Prepare release signing key
+        id: signing
+        env:
+          KS_B64: ${{ secrets.MAGEN_KEYSTORE_BASE64 }}
+          KS_PW: ${{ secrets.MAGEN_KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.MAGEN_KEY_ALIAS }}
+          KS_KEYPW: ${{ secrets.MAGEN_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          mkdir -p .magen-private
+          STORE="$PWD/.magen-private/magen-release.p12"
+          if [ -n "${KS_B64:-}" ]; then
+            echo "Using release key from repository secrets."
+            echo "$KS_B64" | base64 -d > "$STORE"
+            STORE_PW="$KS_PW"; ALIAS="$KS_ALIAS"; KEY_PW="$KS_KEYPW"
+            echo "generated=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::No signing secrets — generating a NEW release key (first build). Back it up!"
+            STORE_PW=$(openssl rand -hex 24)
+            KEY_PW="$STORE_PW"; ALIAS="magen-release"
+            keytool -genkeypair -noprompt -alias "$ALIAS" -keyalg EC -groupname secp256r1 \
+              -sigalg SHA256withECDSA -validity 10000 -dname 'CN=Magen Release,O=Magen,C=IL' \
+              -storetype PKCS12 -keystore "$STORE" -storepass "$STORE_PW" -keypass "$KEY_PW"
+            echo "generated=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "storeFile=.magen-private/magen-release.p12"
+              echo "storePassword=$STORE_PW"
+              echo "keyAlias=$ALIAS"
+              echo "keyPassword=$KEY_PW"
+            } > .magen-private/signing.properties
+          fi
+          # cert fingerprint = SHA-256 of the DER-encoded certificate (matches EXPECTED_SIG_SHA256).
+          keytool -exportcert -alias "$ALIAS" -keystore "$STORE" -storetype PKCS12 \
+            -storepass "$STORE_PW" -file /tmp/cert.der
+          CERT_SHA=$(sha256sum /tmp/cert.der | cut -d' ' -f1)
+          rm -f /tmp/cert.der
+          # export to later steps without printing secrets to the log
+          echo "::add-mask::$STORE_PW"
+          echo "MAGEN_KEYSTORE_FILE=$STORE" >> "$GITHUB_ENV"
+          echo "MAGEN_KEYSTORE_PASSWORD=$STORE_PW" >> "$GITHUB_ENV"
+          echo "MAGEN_KEY_ALIAS=$ALIAS" >> "$GITHUB_ENV"
+          echo "MAGEN_KEY_PASSWORD=$KEY_PW" >> "$GITHUB_ENV"
+          echo "CERT_SHA=$CERT_SHA" >> "$GITHUB_ENV"
+          echo "Release cert SHA-256: $CERT_SHA"
+
+      - name: Release unit tests
+        run: ./gradlew --no-daemon -PvisualModelSha256=$MODEL_SHA -PreleaseCertSha256=$CERT_SHA testReleaseUnitTest
+
+      - name: Assemble signed release APK
+        run: |
+          ./gradlew --no-daemon \
+            -PvisualModelSha256=$MODEL_SHA \
+            -PreleaseCertSha256=$CERT_SHA \
+            -PbuildId=prod-${{ github.sha }} \
+            assembleRelease
+
+      - name: Verify signature
+        run: |
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/36.0.0)
+          "$BT/apksigner" verify --verbose --print-certs \
+            app/build/outputs/apk/release/app-release.apk
+
+      - name: Stage artifacts
+        run: |
+          set -euo pipefail
+          OUT="magen-v4.7.1-hardening-fix-8443-release.apk"
+          cp app/build/outputs/apk/release/app-release.apk "$OUT"
+          sha256sum "$OUT" > "$OUT.sha256"
+          echo "APK_NAME=$OUT" >> "$GITHUB_ENV"
+          if [ "${{ steps.signing.outputs.generated }}" = "true" ]; then
+            mkdir -p keystore-backup
+            cp .magen-private/magen-release.p12 keystore-backup/
+            {
+              echo "# ⚠️ PRIVATE — back this up, then move to repo Secrets and DELETE this artifact."
+              cat .magen-private/signing.properties
+              echo "releaseCertSha256=$CERT_SHA"
+              echo "# For future builds set repo Secrets:"
+              echo "#   MAGEN_KEYSTORE_BASE64 = base64 of magen-release.p12"
+              echo "#   MAGEN_KEYSTORE_PASSWORD / MAGEN_KEY_ALIAS / MAGEN_KEY_PASSWORD"
+            } > keystore-backup/SIGNING_CREDENTIALS.txt
+            base64 -w0 .magen-private/magen-release.p12 > keystore-backup/magen-release.p12.base64
+          fi
+
+      - name: Upload signed APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: magen-release-apk
+          path: |
+            magen-v4.7.1-hardening-fix-8443-release.apk
+            magen-v4.7.1-hardening-fix-8443-release.apk.sha256
+          retention-days: 30
+
+      - name: Upload keystore backup (first build only)
+        if: steps.signing.outputs.generated == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: SIGNING-KEYSTORE-BACKUP
+          path: keystore-backup/**
+          retention-days: 7

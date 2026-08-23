@@ -1,0 +1,99 @@
+# v4.7.1 — Hardening Fix
+
+- Fixed the missing OTA helper implementations that could prevent Android compilation.
+- Added exact secp256r1 update-key validation, per-channel anti-rollback state and exact-origin APK download enforcement.
+- Expanded conservative sensitive-host HTTPS-inspection bypasses on both phone and VPS.
+- Strengthened release CI/verifier checks and Visual AI model pinning.
+- Server-side companion v4.7.1 isolates the MITM signer, stabilizes Circle identity, fixes restore verification and hardens migrations/rollback.
+
+# v4.7.0 — Production Hardening & Device-bound Inspection
+
+- Fixed the Java `Signature` import collision in the signed updater.
+- Enabled R8/resource shrinking for release builds and removed string-only service reflection.
+- Added verifier coverage for Java import collisions.
+- Release CI now runs on `v*` tags and depends on the tested build job.
+- Synchronized release version to versionCode 21 / v4.7.0.
+- Android still validates `scope=DEVICE_BOUND` and exact `device_id` on CA/leaf payloads.
+
+# v4.5.2 — One-shot Short-form Auto Skip
+
+- Visual Shield can now skip a detected unsafe TikTok/Shorts/Reels/Spotlight item with exactly one upward accessibility gesture instead of closing the entire app.
+- Anti-loop state machine: no second swipe until a real scroll confirms advancement, same-item suppression, 1.8s gesture cooldown, and a 4-skips/15s circuit breaker with a 20s safety pause.
+- If the gesture is rejected/cancelled or the feed does not advance, Magen falls back to the existing hard visual block instead of retrying endlessly.
+- Auto-skip curtain is opaque but non-touchable so the accessibility gesture reaches the underlying feed; it auto-hides and never schedules another gesture.
+- Supported short-form surfaces: TikTok, YouTube Shorts, Instagram/Facebook Reels, Snapchat Spotlight (non-TikTok apps require their short-form UI marker).
+- No visible text/signature used for anti-looping is logged or sent to the VPS.
+- Server endpoint remains https://51.20.205.229:8443.
+
+# Magen Phone v4.5.1 — Audited HTTPS Inspection
+
+## v4.5.1
+- Deep line-by-line reliability/security audit over VPN, TCP/UDP, HTTPS inspection, CA lifecycle, update pipeline and recovery.
+- Fixed TCP handshake/SYN retransmission, sequence wrap, FIN/half-close, zero-window/ACK and packet-length edge cases.
+- Connected UDP channels to the exact peer and hardened DNS/SNI/TCP parsers; deterministic 200k malformed-input fuzz pass.
+- Removed explicit localhost proxy bypass; transparent MITM listener now requires a per-process secret preamble.
+- Device-bound HTTPS inspection Root CA per enrolled device; sensitive-host exclusions remain fail-closed.
+- KillSwitch is now a proper specialUse foreground service for background protection events.
+- Signed updates now download privately, require signed SHA-256, package identity and release-signer verification before FileProvider install.
+- Update trust key no longer defaults to the online VPS signing key.
+
+## v4.5.0
+- Dedicated managed HTTPS-inspection CA with VPS-isolated signer.
+- Local explicit proxy on 127.0.0.1:18082 and transparent Full-Tunnel TLS interception on 127.0.0.1:18083.
+- Per-host ephemeral EC P-256 leaf keys; short-lived exact-SAN certificates only.
+- Device Owner CA lifecycle + recommended global proxy; manual Android CA workflow retained.
+- No pinning bypass; hashed compatibility fallback for incompatible apps.
+- Known and heuristically detected identity/payment/banking/health/password-manager hosts are conservatively tunneled end-to-end.
+- TLS 1.2/1.3 only, upstream hostname validation, request-smuggling/header hardening, Host/SNI consistency checks.
+- CA rotation detection, leaf-cache invalidation and bounded fallback cache.
+- TcpRelay transparent redirect with selector-thread replacement and single-writer upstream ordering.
+
+---
+
+# Magen Phone v4.4.0 — Production Observability & Reliability
+
+## v4.4.0
+
+- Server endpoint validation is now strictly HTTPS + explicit port 8443, with no path/query/user-info.
+- Android VPS client disables redirects, bounds responses, retries only safe operational calls and uses fresh signed nonces.
+- Connectivity `NetworkCallback` triggers fast heartbeat recovery after Wi-Fi/mobile transitions with debounce/backoff.
+- Heartbeat scheduling is single-flight: network pokes can move one pending task earlier but cannot create parallel recurring chains.
+- All VPN revival paths (watchdog, tamper detector, UI and self-restart) are centralized through Android O+ safe `startForegroundService()`.
+- Events and Content Incidents carry client-generated IDs for idempotent retries.
+- Heartbeat now reports process instance, VPS failure streak, VPN restart count, Full Tunnel, Device Owner and real blocklist metadata.
+- Fixed the previous heartbeat bug that always reported blocklist version 0.
+- Production phone blocklist updates are signed-VPS-only; last-known-good cache is retained when the VPS is unavailable.
+- Invalid server URLs are rejected in the UI without crashing the settings dialog.
+- Static verifier now asserts v4.4 reliability/security invariants and its warning-print loop was fixed.
+- Server adds worker liveness, signed runtime status, `/ready` runtime checks, `magenctl doctor`, `magenctl report`, and richer live monitoring.
+- VPS blocklist build adds critical-domain poisoning and implausible-growth guards before signing.
+- Fresh-install resume and upgrade rollback now cover more partial-failure states/configuration.
+- VPS request-auth headers are shape/size validated before DB and ECDSA work, reducing malformed-request failure modes.
+- `/ready` now validates that the application signing key is a real EC P-256 private key, not merely a readable file.
+- Production configuration bounds timeouts, fetch sizes, redirects, retention knobs and PUBLIC_HOST format and fails fast at API startup.
+- TEXT review privacy was tightened: AI-generated reasons are never persisted because a model could quote visible user text.
+- Server remains `https://51.20.205.229:8443`; port 443 remains untouched.
+
+## v4.3.0
+
+- Unified Content Incident pipeline for DOMAIN / TEXT / VISUAL blocks.
+- Privacy-minimized reporting: no screenshot bytes and no raw visible text are stored in incidents.
+- Domain incidents carry normalized host + decision metadata; text incidents carry only SHA-256 + package; visual incidents carry package + numeric LiteRT scores.
+- Reliable bounded incident queue with retry and client/server deduplication.
+- Intelligence runtime counters: domain/text calls, cache hits, blocks and failures.
+- Heartbeat now reports intelligence health and incident queue depth to the VPS.
+- Safe VPN self-heal is requested from the heartbeat path when the already-authorized Magen VPN is down.
+- Persistent server-verdict cache is now bounded to 2,500 live entries and periodically prunes expired/old entries.
+- Telegram visible-text classification now records package context without persisting the visible text.
+- Existing on-device Visual Shield remains local-only; image bytes never leave the phone.
+- Production server endpoint remains `https://51.20.205.229:8443`.
+
+## v4.2.4 hardening retained
+
+- Signed Release APK build and `apksigner` verification.
+- Persistent release signing identity + IntegrityGuard certificate pin.
+- Full Tunnel production mode; no automatic DNS-only downgrade.
+- TCP receive-window / zero-window / Window Scale fixes.
+- Larger TLS ClientHello inspection budget.
+- IPv6 remains fail-closed until a complete IPv6 relay is implemented.
+- Crash telemetry redaction, Device Owner provisioning helper and fresh-server pairing import.

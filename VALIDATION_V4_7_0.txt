@@ -1,0 +1,3 @@
+SUPERSEDED — original v4.7.0 validation
+======================================
+This historical validation is retained only for provenance. It was not sufficient to prove Java symbol resolution: the missing UpdateChecker helper implementations were missed. Use VALIDATION_V4_7_1.txt for the corrected package.

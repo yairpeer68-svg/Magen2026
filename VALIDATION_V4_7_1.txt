@@ -1,0 +1,32 @@
+Magen Phone v4.7.1 hardening validation
+=======================================
+Date: 2026-08-23
+
+PASS: verify.py --strict — 18/18 static validation groups
+PASS: 144 Java files scanned by the project verifier
+PASS: 62 XML files scanned by the project verifier
+PASS: changed critical Java classes compile with javac 17 against Android API stubs
+PASS: MITM sensitive-host policy smoke test
+PASS: Gradle wrapper JAR SHA-256 matches the project-pinned wrapper hash
+PASS: YAML parse for .github/workflows/android-ci.yml
+PASS: no private key / JKS / P12 / keystore artifacts found in the source bundle
+PASS: no TODO/FIXME/NotImplemented placeholders in Android runtime source
+PASS: no trust-all/hostname-verifier bypass pattern found in Android runtime source
+
+Regression coverage includes:
+- real implementations for rolloutBucket() and verifyManifestWithKey()
+- exact secp256r1 update public-key validation + SHA256withECDSA
+- per-channel persisted anti-rollback watermarks and same-sequence conflict detection
+- stable random installation rollout bucket
+- exact HTTPS origin enforcement for APK download
+- conservative sensitive-host inspection bypass matching the VPS
+- production release preflight for model pin, release signer and signer fingerprint
+- CI lint/unit/debug build plus signed-release/apksigner verification on tagged releases
+
+LIMITATION OF THIS ANALYSIS CONTAINER:
+A full local Gradle/Android SDK build could not run because this container has no Android SDK and
+cannot resolve services.gradle.org. This is an environment limitation, not a reported build pass.
+The strengthened GitHub Actions workflow performs testDebugUnitTest, lintDebug, assembleDebug,
+testReleaseUnitTest, assembleRelease and apksigner verification on a networked Android build host.
+A production release additionally requires the independently pinned Visual AI model SHA-256 and
+release signing secrets; no guessed secrets or model hash are embedded in this bundle.

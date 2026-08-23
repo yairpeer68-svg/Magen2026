@@ -1,0 +1,206 @@
+package com.magen.family.filter;
+
+import android.content.Context;
+import android.content.SharedPreferences;
+import android.util.Log;
+import com.magen.family.MagenApp;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.regex.Pattern;
+
+/**
+ * מנוע סינון תוכן מרכזי
+ * בודק URLs, שמות אפליקציות ומילות חיפוש
+ */
+public class ContentFilter {
+
+    private static final String TAG = "ContentFilter";
+
+    // ===== רשימת דומיינים לחסימה =====
+    private static final Set<String> BLOCKED_DOMAINS = new HashSet<>(Arrays.asList(
+        // אתרי תוכן למבוגרים - קטגוריה ראשית
+        "pornhub.com", "xvideos.com", "xnxx.com", "xhamster.com",
+        "redtube.com", "youporn.com", "tube8.com", "spankbang.com",
+        "beeg.com", "tnaflix.com", "drtuber.com", "hclips.com",
+        "txxx.com", "hdtube.porn", "fapster.xxx", "porntrex.com",
+        "porndoe.com", "fuq.com", "4tube.com", "hardsextube.com",
+        "3movs.com", "sunporno.com", "porndig.com", "slutload.com",
+        "empflix.com", "pornoxo.com", "nuvid.com", "xtube.com",
+        "playvids.com", "vporn.com", "pornid.xxx", "sex.com",
+        "clips4sale.com", "onlyfans.com", "manyvids.com",
+        "brazzers.com", "realitykings.com", "bangbros.com",
+        "mofos.com", "naughtyamerica.com", "digitalplayground.com",
+        "wicked.com", "vivid.com", "penthouse.com", "hustler.com",
+        "playboy.com",
+
+        // סיומות לחסימה (יטופל בנפרד)
+        // .xxx .porn .sex .adult - בregex
+
+        // אתרי הימורים
+        "bet365.com", "888casino.com", "pokerstars.com",
+        "betway.com", "williamhill.com", "ladbrokes.com",
+
+        // דוגמאות נוספות שניתן להרחיב
+        "webcam.com", "chaturbate.com", "livejasmin.com",
+        "bongacams.com", "myfreecams.com", "stripchat.com",
+        "cam4.com", "camsoda.com", "flirt4free.com"
+    ));
+
+    // ===== מילות מפתח לחסימה בכתובות URL =====
+    private static final Set<String> BLOCKED_KEYWORDS = new HashSet<>(Arrays.asList(
+        "porn", "xxx", "sex", "nude", "naked", "erotic",
+        "adult-content", "18plus", "hentai", "nsfw"
+    ));
+
+    // ===== דפדפנים לפיקוח =====
+    public static final Set<String> BROWSER_PACKAGES = new HashSet<>(Arrays.asList(
+        "com.android.chrome",
+        "org.mozilla.firefox",
+        "com.microsoft.emmx",        // Edge
+        "com.opera.browser",
+        "com.opera.mini.native",
+        "com.brave.browser",
+        "com.UCMobile.intl",
+        "com.uc.browser.en",
+        "com.kiwibrowser.browser",
+        "mark.via.gp",               // Via Browser
+        "com.sec.android.app.sbrowser", // Samsung Internet
+        "com.android.browser",
+        "org.mozilla.firefox_beta",
+        "com.duckduckgo.mobile.android",
+        // הוספות — forks/דפדפנים נפוצים נוספים שלא היו ברשימה
+        "com.vivaldi.browser",
+        "com.yandex.browser",
+        "com.mi.globalbrowser", "com.mi.globalbrowser.mini", // Mi Browser
+        "com.miui.browser",
+        "com.huawei.browser",
+        "com.opera.gx",
+        "com.opera.cryptobrowser",
+        "org.mozilla.focus", "org.mozilla.klar",   // Firefox Focus/Klar
+        "com.ecosia.android",
+        "com.cloudmosa.puffinFree",                 // Puffin
+        "mobi.mgeek.TunnyBrowser",                  // Dolphin
+        "com.mx.browser",                           // Maxthon
+        "com.coccoc.trinhduyet",                    // CoCoc
+        "com.naver.whale",                          // Whale
+        "acr.browser.lightning", "com.jamal2367.styx",
+        "com.microsoft.bing",                       // Bing app (in-app browser)
+        "com.brave.browser_beta", "com.brave.browser_nightly",
+        "com.chrome.beta", "com.chrome.dev", "com.chrome.canary"
+    ));
+
+    // ===== רגקס לסיומות למבוגרים =====
+    private static final Pattern ADULT_TLD_PATTERN =
+        Pattern.compile(".*\\.(xxx|porn|sex|adult|sexy|fuck|cock|pussy)$",
+            Pattern.CASE_INSENSITIVE);
+
+    private static final Pattern AMBIGUOUS_URL_TOKEN_PATTERN =
+        Pattern.compile("(^|[^a-z0-9])(xxx|sex|nude|naked|erotic)([^a-z0-9]|$)", Pattern.CASE_INSENSITIVE);
+    private static final Set<String> STRONG_RAW_KEYWORDS = new HashSet<>(Arrays.asList(
+        "porn", "adult-content", "18plus", "hentai", "nsfw"
+    ));
+
+    private final Context context;
+    private final AhoCorasick keywordMatcher;
+
+    public ContentFilter(Context context) {
+        this.context = context;
+        this.keywordMatcher = new AhoCorasick();
+        keywordMatcher.addAll(STRONG_RAW_KEYWORDS);
+        keywordMatcher.build();
+    }
+
+    /**
+     * הפונקציה הראשית - בודקת אם URL צריך להיחסם.
+     * שינוי מהגרסה הקודמת: לא מעדכנים את המונה כאן — המונה זז למקום אחד מרכזי
+     * (ה-caller שגרם לחסימה בפועל), כדי שלא נסכן הכפלה אם אותה URL נבדק כמה פעמים.
+     */
+    public boolean shouldBlock(String url) {
+        if (url == null || url.isEmpty()) return false;
+
+        String urlLower = url.toLowerCase().trim();
+        String domain = extractDomain(urlLower);
+
+        // ההכרעה המרכזית — כוללת גם את הרשימה המרוחקת ואת ה-allow list
+        if (DomainVerdict.isBlocked(context, domain)) {
+            Log.d(TAG, "BLOCKED (host): " + domain);
+            recordBlocked();
+            return true;
+        }
+        // מילת מפתח בנתיב/בשאילתה, מעבר לשם הדומיין עצמו
+        if (containsBlockedKeyword(urlLower)) {
+            Log.d(TAG, "BLOCKED (keyword in URL; value redacted)");
+            recordBlocked();
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * בדיקת שם מארח בלבד (בלי סכימה/נתיב) מול הרשימות המקומיות.
+     * זו נקודת הכניסה ש-DomainVerdict קורא לה — ולכן היא *אסורה* לקרוא
+     * חזרה ל-DomainVerdict, אחרת נוצרת רקורסיה אינסופית.
+     */
+    public boolean isHostBlocked(String host) {
+        if (host == null || host.isEmpty()) return false;
+        String h = host.toLowerCase().trim();
+        if (isDomainBlocked(h)) return true;
+        return ADULT_TLD_PATTERN.matcher(h).matches();
+    }
+
+    private void recordBlocked() {
+        try {
+            ((MagenApp) context.getApplicationContext()).incrementBlockedCount();
+        } catch (Exception ignored) {}
+    }
+
+    /**
+     * בדיקת שם אפליקציה
+     */
+    public boolean isAppBlocked(String packageName) {
+        if (packageName == null) return false;
+        SharedPreferences prefs = ((MagenApp) context.getApplicationContext()).getPrefs();
+        // קרא רשימת אפליקציות חסומות בהתאמה אישית
+        Set<String> blockedApps = prefs.getStringSet("blocked_apps", new HashSet<>());
+        return blockedApps.contains(packageName);
+    }
+
+    /**
+     * חילוץ דומיין מ-URL
+     */
+    public String extractDomain(String url) {
+        return HostUtil.extractHost(url);
+    }
+
+    /**
+     * בדיקה אם הדומיין או דומיין-על שלו ברשימה השחורה
+     */
+    private boolean isDomainBlocked(String domain) {
+        if (BLOCKED_DOMAINS.contains(domain)) return true;
+        // בדוק גם תת-דומיינים: video.pornhub.com -> pornhub.com
+        String[] parts = domain.split("\\.");
+        if (parts.length >= 2) {
+            String rootDomain = parts[parts.length - 2] + "." + parts[parts.length - 1];
+            if (BLOCKED_DOMAINS.contains(rootDomain)) return true;
+        }
+        return false;
+    }
+
+    private boolean containsBlockedKeyword(String url) {
+        SharedPreferences prefs = ((MagenApp) context.getApplicationContext()).getPrefs();
+        if (!prefs.getBoolean(MagenApp.KEY_BLOCK_ADULT, true)) return false;
+        // רמת סינון LIGHT מסתמכת על דומיינים בלבד — בלי מילות מפתח
+        if (!FilterPolicy.useKeywords(context)) return false;
+        // Strong, unambiguous signals may match inside a path segment (e.g. "freeporn").
+        // Short/ambiguous words such as "sex" require URL-token boundaries so benign names like
+        // "sussex" are not blocked merely because they contain those letters. Host blocking has
+        // already been evaluated separately by DomainVerdict above.
+        if (keywordMatcher.containsRaw(url)) return true;
+        return AMBIGUOUS_URL_TOKEN_PATTERN.matcher(url).find();
+    }
+
+    public Set<String> getBlockedDomains() {
+        return new HashSet<>(BLOCKED_DOMAINS);
+    }
+}

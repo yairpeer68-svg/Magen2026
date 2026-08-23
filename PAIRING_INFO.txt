@@ -1,0 +1,11 @@
+Magen Android pairing — v4.7.1
+
+Bundled live server:
+  https://51.20.205.229:8443
+
+For an upgraded existing VPS, existing PKI is preserved.
+For a fresh VPS, import the newly generated pairing bundle BEFORE building the APK:
+  IMPORT_SERVER_PAIRING_ON_WINDOWS.bat <pairing-folder>
+
+Only public CA/public verification key material is imported into Android.
+Never copy server.key, ca.key or signing.key to the phone source.
