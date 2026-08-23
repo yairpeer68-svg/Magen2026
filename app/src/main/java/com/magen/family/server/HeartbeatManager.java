@@ -101,11 +101,11 @@ public final class HeartbeatManager {
                 .put("mitm_ca_trusted",MitmCaManager.isTrustedForInspection(c))
                 .put("mitm_proxy_running",HttpsInspectionProxy.get(c).isRunning())
                 .put("mitm_connections",MitmRuntimeState.proxyConnections())
-                .put("mitm_intercepted",MitmRuntimeState.intercepted())
-                .put("mitm_tunneled",MitmRuntimeState.tunneled())
-                .put("mitm_blocks",MitmRuntimeState.blocked())
-                .put("mitm_cert_issued",MitmRuntimeState.certIssued())
-                .put("mitm_fallback",MitmRuntimeState.fallback())
+                .put("mitm_intercepted",MitmRuntimeState.interceptedCount())
+                .put("mitm_tunneled",MitmRuntimeState.tunneledCount())
+                .put("mitm_blocks",MitmRuntimeState.blockedCount())
+                .put("mitm_cert_issued",MitmRuntimeState.certIssuedCount())
+                .put("mitm_fallback",MitmRuntimeState.fallbackCount())
                 .put("mitm_failures",MitmRuntimeState.failures());
             JSONObject reply=MagenApiClient.signedPost(c,"/v1/heartbeat",b,true);
             if(reply.has("trust_score")) ServerConfig.setTrustScore(c,reply.optInt("trust_score",0));

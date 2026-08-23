@@ -20,10 +20,10 @@ public final class MitmRuntimeState {
     public static void fallback(){fallback.incrementAndGet();}
     public static void failure(){failures.incrementAndGet();}
     public static long proxyConnections(){return proxyConnections.get();}
-    public static long intercepted(){return intercepted.get();}
-    public static long tunneled(){return tunneled.get();}
-    public static long blocked(){return blocked.get();}
-    public static long certIssued(){return certIssued.get();}
-    public static long fallback(){return fallback.get();}
+    public static long interceptedCount(){return intercepted.get();}
+    public static long tunneledCount(){return tunneled.get();}
+    public static long blockedCount(){return blocked.get();}
+    public static long certIssuedCount(){return certIssued.get();}
+    public static long fallbackCount(){return fallback.get();}
     public static long failures(){return failures.get();}
 }

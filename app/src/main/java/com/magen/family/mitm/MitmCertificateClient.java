@@ -39,7 +39,7 @@ public final class MitmCertificateClient {
     }
     private static final int MAX_CACHE=512;
     private static final Object LOCK=new Object();
-    private static final Map<String,Entry> CACHE=new LinkedHashMap<String,Entry>(MAX_CACHE,.75f,true){protected boolean removeEldestEntry(Map.Entry<String,Entry> e){return size()>MAX_CACHE;}};
+    private static final Map<String,Entry> CACHE=new LinkedHashMap<String,Entry>(MAX_CACHE,.75f,true){protected boolean removeEldestEntry(Map.Entry<String,MitmCertificateClient.Entry> e){return size()>MAX_CACHE;}};
     private static final class Entry{final Material m;final long expiresElapsed;final String caSha;Entry(Material m,long e,String s){this.m=m;this.expiresElapsed=e;this.caSha=s;}}
     private MitmCertificateClient(){}
 
