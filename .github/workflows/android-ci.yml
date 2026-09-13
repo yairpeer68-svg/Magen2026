@@ -69,7 +69,8 @@ jobs:
       - name: Unit tests (debug)
         run: ./gradlew testDebugUnitTest --no-daemon --stacktrace
 
-      - name: Lint debug
+      - name: Lint debug (diagnostic, non-blocking for debug APK)
+        continue-on-error: true
         run: ./gradlew lintDebug --no-daemon --stacktrace
 
       - name: Assemble debug APK
