@@ -539,9 +539,10 @@ public class OnboardingActivity extends BaseActivity {
                         "VPN DEBUG: permission granted — starting VPN",
                         android.widget.Toast.LENGTH_LONG).show();
                 } else {
-                    android.widget.Toast.makeText(this,
-                        "VPN DEBUG: permission NOT granted (result=" + res + ")",
-                        android.widget.Toast.LENGTH_LONG).show();
+                    com.magen.family.debug.DebugLog.log(this, tag,
+                        "permission denied/cancelled; showing built-in diagnostic report");
+                    com.magen.family.debug.DebugLog.flush(this);
+                    showVpnDiagnosticReport("VPN permission NOT granted (result=" + res + ")");
                 }
                 com.magen.family.debug.DebugLog.flush(this);
             } catch (Exception e) {
@@ -563,6 +564,34 @@ public class OnboardingActivity extends BaseActivity {
         if (!advanceIfGrantedAfterAttempt()) render();
     }
 
+
+    private void showVpnDiagnosticReport(String headline) {
+        try {
+            final String report = headline + "\n\n" +
+                com.magen.family.debug.DebugLog.buildReport(this);
+            android.widget.TextView body = new android.widget.TextView(this);
+            body.setText(report);
+            body.setTextIsSelectable(true);
+            body.setTextSize(12);
+            int pad = (int) (16 * getResources().getDisplayMetrics().density);
+            body.setPadding(pad, pad, pad, pad);
+            android.widget.ScrollView scroll = new android.widget.ScrollView(this);
+            scroll.addView(body);
+            new androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("VPN DEBUG — diagnostic report")
+                .setView(scroll)
+                .setPositiveButton("העתק דוח", (d, w) -> {
+                    android.content.ClipboardManager cm = (android.content.ClipboardManager)
+                        getSystemService(android.content.Context.CLIPBOARD_SERVICE);
+                    if (cm != null) cm.setPrimaryClip(
+                        android.content.ClipData.newPlainText("Magen VPN diagnostic", report));
+                })
+                .setNegativeButton("סגור", null)
+                .show();
+        } catch (Exception e) {
+            android.util.Log.e("VPN_PERMISSION", "show diagnostic report failed", e);
+        }
+    }
 
     private boolean advanceIfGrantedAfterAttempt() {
         try {

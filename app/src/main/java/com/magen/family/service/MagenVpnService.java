@@ -109,6 +109,9 @@ public class MagenVpnService extends VpnService implements Runnable, TunBridge {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        com.magen.family.debug.DebugLog.log(this, "VPN_SERVICE",
+            "onStartCommand flags=" + flags + " startId=" + startId
+                + " threadAlive=" + (vpnThread != null && vpnThread.isAlive()));
         // חייב להיקרא מיד — גם כשהופעלנו דרך startForegroundService()
         startAsForeground();
 
@@ -165,11 +168,19 @@ public class MagenVpnService extends VpnService implements Runnable, TunBridge {
         boolean establishedOk = false;
 
         try {
+            com.magen.family.debug.DebugLog.log(this, "VPN_SERVICE",
+                "worker started; calling buildTunnel/establish");
             vpnInterface = buildTunnel();
             if (vpnInterface == null) {
                 Log.e(TAG, "establish() returned null — VPN permission missing?");
+                com.magen.family.debug.DebugLog.log(this, "VPN_SERVICE",
+                    "FAIL establish returned null — permission missing/revoked or OS rejected tunnel");
+                com.magen.family.debug.DebugLog.flush(this);
                 return;
             }
+            com.magen.family.debug.DebugLog.log(this, "VPN_SERVICE",
+                "SUCCESS establish returned interface");
+            com.magen.family.debug.DebugLog.flush(this);
             establishedOk = true;
             tunnelEstablishedAt = SystemClock.elapsedRealtime();
 

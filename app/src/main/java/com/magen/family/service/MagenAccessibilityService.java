@@ -230,6 +230,17 @@ public class MagenAccessibilityService extends AccessibilityService {
         String pkg = event.getPackageName() != null ? event.getPackageName().toString() : "";
         String className = event.getClassName() != null ? event.getClassName().toString() : "";
 
+        boolean vpnUi = pkg.toLowerCase(java.util.Locale.US).contains("vpn")
+            || className.toLowerCase(java.util.Locale.US).contains("vpn");
+        if (vpnUi && event.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            com.magen.family.debug.DebugLog.log(this, "VPN_A11Y",
+                "window pkg=" + pkg + " class=" + className
+                    + " armed=" + MagenGuard.isArmed(this)
+                    + " maintenance=" + MagenGuard.inMaintenance(this)
+                    + " scopeVpn=" + MagenGuard.allows(this, MagenGuard.SCOPE_VPN)
+                    + " anySensitive=" + MagenGuard.allowsAnySensitiveScreen(this));
+        }
+
         // A real accessibility scroll confirms that a previous one-shot short-form skip
         // advanced the feed. This is the main anti-loop signal: without it, Magen will not
         // issue another automatic swipe for the same pending item.
@@ -298,7 +309,13 @@ public class MagenAccessibilityService extends AccessibilityService {
         // פתחנו בכוונה, ולכן אסור להגנה העצמית לסגור אותו. מחוץ לחלון
         // התחזוקה הוא עדיין נחשב ניסיון לעקוף את ה-VPN שלנו.
         if (pkg.equals("com.android.vpndialogs") || pkg.contains("vpndialog")) {
-            if (MagenGuard.allowsAnySensitiveScreen(this) || MagenGuard.allows(this, MagenGuard.SCOPE_VPN)) return;
+            boolean allowed = MagenGuard.allowsAnySensitiveScreen(this)
+                || MagenGuard.allows(this, MagenGuard.SCOPE_VPN);
+            com.magen.family.debug.DebugLog.log(this, "VPN_A11Y",
+                "consent dialog pkg=" + pkg + " class=" + className + " allowed=" + allowed);
+            if (allowed) return;
+            com.magen.family.debug.DebugLog.log(this, "VPN_A11Y",
+                "BLOCKING consent dialog via BACK+HOME");
             if (behaviorAnalyzer != null) behaviorAnalyzer.recordVpnBypassAttempt();
             performGlobalAction(GLOBAL_ACTION_BACK);
             performGlobalAction(GLOBAL_ACTION_HOME);
