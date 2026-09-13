@@ -5,8 +5,12 @@ import static org.junit.Assert.*;
 
 public class VisualDecisionTest {
     private VisualPolicy.Config strict() {
-        return new VisualPolicy.Config(true,"STRICT",1100,6,true,true,
-            .35f,.35f,.45f,.62f,.48f);
+        return new VisualPolicy.Config(
+            true, "STRICT", 1100L, 650L, 6,
+            true, true,
+            .35f, .35f, .45f, .62f, .48f,
+            true, 3600L, 2, 3,
+            .85f, .85f, .90f, 5);
     }
 
     @Test public void strictBlocksSexyTopClassEvenWhenFlat() {
@@ -20,8 +24,12 @@ public class VisualDecisionTest {
     }
 
     @Test public void offAlwaysAllows() {
-        VisualPolicy.Config off=new VisualPolicy.Config(false,"OFF",1100,6,true,true,
-            .35f,.35f,.45f,.62f,.48f);
+        VisualPolicy.Config off=new VisualPolicy.Config(
+            false, "OFF", 1100L, 650L, 6,
+            true, true,
+            .35f, .35f, .45f, .62f, .48f,
+            true, 3600L, 2, 3,
+            .85f, .85f, .90f, 5);
         NsfwResult r=new NsfwResult("porn",.99f,0f,0f,0f,.99f,.01f,1);
         assertFalse(VisualDecision.shouldBlock(r,off));
     }
