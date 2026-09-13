@@ -1,0 +1,14 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'com.magen.vpnprobe'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId 'com.magen.vpnprobe'
+        minSdk 26
+        targetSdk 36
+        versionCode 1
+        versionName '0.1-vpn-probe'
+    }
+}
