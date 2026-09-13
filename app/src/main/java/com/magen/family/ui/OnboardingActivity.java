@@ -107,8 +107,36 @@ public class OnboardingActivity extends BaseActivity {
         steps.add(new Step(R.string.onb_perm_vpn_title, R.string.onb_perm_vpn_body,
             () -> VpnService.prepare(this) == null,
             () -> {
-                Intent prep = VpnService.prepare(this);
-                if (prep != null) startActivityForResult(prep, 2001);
+                final String tag = "VPN_PERMISSION";
+                try {
+                    Intent prep = VpnService.prepare(this);
+                    boolean alreadyGranted = prep == null;
+                    android.util.Log.i(tag, "prepare() before launch: alreadyGranted=" + alreadyGranted
+                        + ", api=" + Build.VERSION.SDK_INT
+                        + ", accessibility=" + com.magen.family.util.AccessibilityState.isMagenEnabled(this));
+                    com.magen.family.debug.DebugLog.log(this, tag,
+                        "prepare before launch; alreadyGranted=" + alreadyGranted
+                        + ", api=" + Build.VERSION.SDK_INT
+                        + ", accessibility=" + com.magen.family.util.AccessibilityState.isMagenEnabled(this));
+                    if (prep != null) {
+                        android.widget.Toast.makeText(this,
+                            "VPN DEBUG: opening Android VPN permission dialog",
+                            android.widget.Toast.LENGTH_LONG).show();
+                        startActivityForResult(prep, 2001);
+                    } else {
+                        com.magen.family.service.ServiceRevival.reviveVpn(this);
+                        com.magen.family.debug.DebugLog.log(this, tag,
+                            "permission already granted; reviveVpn() requested");
+                        android.widget.Toast.makeText(this,
+                            "VPN DEBUG: permission already granted — starting VPN",
+                            android.widget.Toast.LENGTH_LONG).show();
+                    }
+                } catch (Exception e) {
+                    android.util.Log.e(tag, "VPN permission launch failed", e);
+                    com.magen.family.debug.DebugLog.log(this, tag,
+                        "launch failed: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+                    throw e;
+                }
             }, true));
 
         // 6. נתוני שימוש — מומלץ
@@ -495,6 +523,33 @@ public class OnboardingActivity extends BaseActivity {
     @Override
     protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
+        if (req == 2001) {
+            final String tag = "VPN_PERMISSION";
+            boolean granted = false;
+            try {
+                granted = VpnService.prepare(this) == null;
+                android.util.Log.i(tag, "permission result: resultCode=" + res + ", granted=" + granted);
+                com.magen.family.debug.DebugLog.log(this, tag,
+                    "resultCode=" + res + ", grantedAfterResult=" + granted
+                    + ", vpnRunning=" + com.magen.family.service.MagenVpnService.isVpnRunning);
+                if (granted) {
+                    com.magen.family.service.ServiceRevival.reviveVpn(this);
+                    com.magen.family.debug.DebugLog.log(this, tag, "reviveVpn() requested after grant");
+                    android.widget.Toast.makeText(this,
+                        "VPN DEBUG: permission granted — starting VPN",
+                        android.widget.Toast.LENGTH_LONG).show();
+                } else {
+                    android.widget.Toast.makeText(this,
+                        "VPN DEBUG: permission NOT granted (result=" + res + ")",
+                        android.widget.Toast.LENGTH_LONG).show();
+                }
+                com.magen.family.debug.DebugLog.flush(this);
+            } catch (Exception e) {
+                android.util.Log.e(tag, "VPN result check failed", e);
+                com.magen.family.debug.DebugLog.log(this, tag,
+                    "result check failed: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+            }
+        }
         // אין לסמוך על resultCode בלבד: חלק ממסכי ההגדרות מחזירים RESULT_CANCELED
         // גם כאשר המתג שונה. מקור האמת הוא check.granted() ב-render().
         render();
