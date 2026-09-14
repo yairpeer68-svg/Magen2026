@@ -145,7 +145,7 @@ public final class VisualShieldEngine implements AutoCloseable {
                                 return;
                             }
 
-                            NsfwResult result = classifyScreen(software, cfg);
+                            NsfwResult result = classifyScreen(software, cfg, VisualSurfacePolicy.isRegionMaskSurface(pkg));
                             VisualRuntimeState.scanCompleted();
                             nextAllowedAfter = 0L;
                             if (result != null && temporal.observe(pkg, result, cfg, now)) {
@@ -173,9 +173,9 @@ public final class VisualShieldEngine implements AutoCloseable {
     }
 
     /** Full screen first, then a 3x2 tiled scan of the content area. */
-    private NsfwResult classifyScreen(Bitmap screen, VisualPolicy.Config cfg) {
+    private NsfwResult classifyScreen(Bitmap screen, VisualPolicy.Config cfg, boolean preferTileLocalization) {
         NsfwResult best = classifier.classify(screen, 0);
-        if (best != null && VisualDecision.isImmediateBlock(best, cfg)) return best;
+        if (!preferTileLocalization && best != null && VisualDecision.isImmediateBlock(best, cfg)) return best;
 
         int width = screen.getWidth(), height = screen.getHeight();
         if (width < 120 || height < 160) return best;

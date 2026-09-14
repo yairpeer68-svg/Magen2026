@@ -263,6 +263,7 @@ public class MagenAccessibilityService extends AccessibilityService {
         // advanced the feed. This is the main anti-loop signal: without it, Magen will not
         // issue another automatic swipe for the same pending item.
         if (event.getEventType() == AccessibilityEvent.TYPE_VIEW_SCROLLED) {
+            com.magen.family.visual.MagenVisualRegionMask.hide();
             long scrollNow = SystemClock.elapsedRealtime();
             boolean awaitingBefore = shortFormSkipGuard.isAwaitingAdvance(pkg);
             shortFormSkipGuard.markScrolled(pkg, scrollNow);
@@ -1012,8 +1013,17 @@ public class MagenAccessibilityService extends AccessibilityService {
         if (isShortFormFeed(pkg)) {
             autoScrollDebug("DETECTED", pkg, result.compact());
             autoScrollDebug("BLOCK", pkg, "visual verdict=" + result.label);
+            // Short-form is SKIP-ONLY. Never fall through to HOME/BACK/lockout for a clip.
+            tryAutoSkipShortForm(pkg, result);
+            return;
         }
-        if (tryAutoSkipShortForm(pkg, result)) return;
+
+        if (com.magen.family.visual.VisualSurfacePolicy.isRegionMaskSurface(pkg)) {
+            com.magen.family.visual.MagenVisualRegionMask.show(this, result.tileIndex, result.label);
+            ServerEventReporter.report(this, "VISUAL_REGION_MASK", "HIGH",
+                "package=" + pkg + " tile=" + result.tileIndex + " " + result.compact());
+            return;
+        }
 
         hardBlockVisual(pkg, result);
     }
@@ -1039,12 +1049,15 @@ public class MagenAccessibilityService extends AccessibilityService {
                 decision == ShortFormSkipGuard.Decision.SAME_ITEM) {
             ServerEventReporter.report(this, "SHORTFORM_AUTOSKIP_NO_ADVANCE", "MEDIUM",
                 "package=" + pkg + " decision=" + decision.name());
-            return false;
+            // Already handled/current item not safely advanced yet. Consume without hard-block.
+            return true;
         }
         if (decision == ShortFormSkipGuard.Decision.CIRCUIT_OPEN) {
             ServerEventReporter.report(this, "SHORTFORM_AUTOSKIP_CIRCUIT", "HIGH",
                 "package=" + pkg + " cooldown_ms=" + shortFormSkipGuard.circuitRemainingMs(now));
-            return false;
+            // Circuit breaker means STOP auto-scroll, not close/lock the application.
+            MagenVisualCurtain.hide();
+            return true;
         }
 
         MagenVisualCurtain.showAutoSkip(this, result.label);
@@ -1077,10 +1090,7 @@ public class MagenAccessibilityService extends AccessibilityService {
                     autoScrollDebug("GESTURE CANCELLED", pkg, "Android cancelled dispatchGesture");
                     ServerEventReporter.report(MagenAccessibilityService.this,
                         "SHORTFORM_AUTO_SKIP_CANCELLED", "MEDIUM", "package=" + pkg);
-                    mainHandler.post(() -> {
-                        MagenVisualCurtain.hide();
-                        hardBlockVisualIfStillForeground(pkg, result);
-                    });
+                    mainHandler.post(MagenVisualCurtain::hide);
                 }
             }, null);
         } catch (RuntimeException e) {
@@ -1094,7 +1104,8 @@ public class MagenAccessibilityService extends AccessibilityService {
             autoScrollDebug("SWIPE REJECTED", pkg, "dispatchGesture returned false");
             ServerEventReporter.report(this, "SHORTFORM_AUTO_SKIP_REJECTED", "MEDIUM",
                 "package=" + pkg);
-            return false;
+            // Gesture failure remains skip-only; do not escalate to HOME/BACK/lockout.
+            return true;
         }
 
         autoScrollDebug("SWIPE SENT", pkg,
@@ -1137,9 +1148,7 @@ public class MagenAccessibilityService extends AccessibilityService {
         ServerEventReporter.report(this, "SHORTFORM_GLOBAL_MATCH", "HIGH",
             "package=" + pkg + " reason=" + reason);
         NsfwResult reported = new NsfwResult("reported", 1.0f, 0f, 0f, 0f, 1.0f, 0f, -1);
-        if (!tryAutoSkipShortForm(pkg, reported, "global_report:" + reason)) {
-            hardBlockVisualIfStillForeground(pkg, reported);
-        }
+        tryAutoSkipShortForm(pkg, reported, "global_report:" + reason);
     }
 
     private void reportCurrentShortForm() {
@@ -1204,7 +1213,7 @@ public class MagenAccessibilityService extends AccessibilityService {
         ServerEventReporter.report(this, "SHORTFORM_MANUAL_REPORT", "HIGH",
             "package=" + pkg + " fingerprint_only=true");
         NsfwResult reported = new NsfwResult("reported", 1.0f, 0f, 0f, 0f, 1.0f, 0f, -1);
-        if (!tryAutoSkipShortForm(pkg, reported, "manual_report")) hardBlockVisualIfStillForeground(pkg, reported);
+        tryAutoSkipShortForm(pkg, reported, "manual_report");
     }
 
     private void autoScrollDebug(String stage, String pkg, String details) {
