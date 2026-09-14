@@ -409,15 +409,40 @@ public class MagenAccessibilityService extends AccessibilityService {
             }
         }
 
-        // סריקת DOM — רק אם לא דפדפן (בדפדפן מסתפקים ב-URL).
-        // Telegram נשלח ל-VPS גם ברמת סינון LIGHT: ה-AI הוא שכבת בטיחות נפרדת
-        // מהמילון המקומי ולא אמור להיעלם רק מפני שהמשתמש הוריד את רמת הסינון.
+        // Browser fallback: some Custom Tabs/OEM browsers do not expose a usable URL.
+        // Only WINDOW_CONTENT_CHANGED is scanned here so typing in an address/search field does
+        // not trigger on a single word. High-confidence explicit content is enforced even in LIGHT.
+        if (isBrowser && shouldScanDom &&
+                event.getEventType() == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
+            lastDomScanAt = now;
+            AccessibilityNodeInfo root = getRootInActiveWindow();
+            if (root != null) {
+                try {
+                    if (com.magen.family.filter.FilterPolicy.isCategoryOn(this,
+                            com.magen.family.filter.FilterPolicy.CAT_ADULT)) {
+                        String visible = collectVisibleText(root, 5000);
+                        if (com.magen.family.filter.BrowserExplicitContent.isClearlyExplicit(visible)) {
+                            lastContentBlockPkg = pkg;
+                            lastContentBlockTime = now;
+                            ServerEventReporter.report(this, "BROWSER_EXPLICIT_FALLBACK", "HIGH",
+                                "package=" + pkg + " url_exposed=" + (extractUrl() != null));
+                            block();
+                            return;
+                        }
+                    }
+                } finally {
+                    root.recycle();
+                }
+            }
+        }
+
+        // Non-browser DOM scan remains independent from the filter keyword switch for Telegram AI.
+        // WebViews also get the high-confidence adult fallback before the regular keyword policy.
         if (!isBrowser && shouldScanDom && (
             event.getEventType() == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED ||
             event.getEventType() == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED)) {
             lastDomScanAt = now;
 
-            // צינון — אל תחסום שוב את אותה אפליקציה תוך 6 שניות (מונע לולאה אינסופית)
             if (pkg.equals(lastContentBlockPkg) && (now - lastContentBlockTime) < CONTENT_BLOCK_COOLDOWN_MS) {
                 return;
             }
@@ -425,9 +450,21 @@ public class MagenAccessibilityService extends AccessibilityService {
             AccessibilityNodeInfo root = getRootInActiveWindow();
             if (root != null) {
                 try {
-                    // Telegram: כל שינוי טקסט/תיאור גלוי נשלח ל-VPS/DeepSeek במקביל.
-                    // החסימה המקומית עדיין קודמת בזמן כשהמילון מופעל, ולכן מילה
-                    // מפורשת מוכרת נחסמת בלי להמתין לרשת.
+                    if (isWebView &&
+                            com.magen.family.filter.FilterPolicy.isCategoryOn(this,
+                                com.magen.family.filter.FilterPolicy.CAT_ADULT)) {
+                        String visible = collectVisibleText(root, 5000);
+                        if (com.magen.family.filter.BrowserExplicitContent.isClearlyExplicit(visible)) {
+                            lastContentBlockPkg = pkg;
+                            lastContentBlockTime = now;
+                            ServerEventReporter.report(this, "WEBVIEW_EXPLICIT_FALLBACK", "HIGH",
+                                "package=" + pkg);
+                            block();
+                            return;
+                        }
+                    }
+
+                    // Telegram stays an independent VPS/AI safety layer even in LIGHT mode.
                     if (TELEGRAM_PACKAGES.contains(pkg)) {
                         maybeClassifyTelegramVisibleText(root, pkg, now);
                     }
@@ -459,6 +496,7 @@ public class MagenAccessibilityService extends AccessibilityService {
                         lastBlockedUrl = url;
                         lastBlockTime = now;
                         blockBrowser(url);
+                        return;
                     }
                 }
             }

@@ -86,6 +86,8 @@ public class ContentFilter {
         "com.naver.whale",                          // Whale
         "acr.browser.lightning", "com.jamal2367.styx",
         "com.microsoft.bing",                       // Bing app (in-app browser)
+        "com.google.android.googlequicksearchbox",        // Google app / embedded Custom Tabs
+        "com.google.android.apps.searchlite",             // Google Go / embedded web surface
         "com.brave.browser_beta", "com.brave.browser_nightly",
         "com.chrome.beta", "com.chrome.dev", "com.chrome.canary"
     ));

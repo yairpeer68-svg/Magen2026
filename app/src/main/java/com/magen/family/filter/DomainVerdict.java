@@ -116,7 +116,7 @@ public final class DomainVerdict {
         }
 
         // 5. זיהוי mirror/proxy דינמי — אתרים חדשים שהרשימות עוד לא הכירו
-        if (looksLikeAdultMirror(h)) return blockIncident(ctx,h,"MIRROR_HEURISTIC","ADULT_MIRROR",0.96);
+        if (AdultDomainHeuristics.isClearlyAdultHost(h)) return blockIncident(ctx,h,"MIRROR_HEURISTIC","ADULT_MIRROR",0.96);
 
         // 6. VPS Intelligence — רק אחרי שכל הידע המקומי מוצה. DeepSeek לעולם
         // לא נקרא מתוך thread ה-VPN: cache מקומי מוחזר מייד, וב-miss נשלחת

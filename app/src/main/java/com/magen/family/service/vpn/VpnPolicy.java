@@ -19,14 +19,15 @@ public final class VpnPolicy {
     private static final String PREFS = "magen_vpn_policy";
     private static final String K_FULL_TUNNEL = "full_tunnel";
     private static final String K_POLICY_VERSION = "policy_version";
-    private static final int POLICY_VERSION = 2;
+    private static final int POLICY_VERSION = 3;
     private static final String K_BLOCK_QUIC  = "block_quic";
     private static final String K_SNI_FILTER  = "sni_filter";
     private static final String K_UPSTREAM    = "upstream_dns";
     private static final String K_BLOCK_HOTSPOT = "block_hotspot";
 
-    public static final String DEFAULT_UPSTREAM_DNS = "94.140.14.15";
-    public static final String FALLBACK_UPSTREAM_DNS = "94.140.15.16";
+    public static final String DEFAULT_UPSTREAM_DNS = "1.1.1.3";
+    public static final String FALLBACK_UPSTREAM_DNS = "1.0.0.3";
+    private static final String LEGACY_DEFAULT_UPSTREAM_DNS = "94.140.14.15";
 
     /**
      * שרשרת resolver-ים לגיבוי (failover). כולם מסננים תוכן למבוגרים (family-safe),
@@ -35,12 +36,12 @@ public final class VpnPolicy {
      * אמיתי; אם הוא נחסם/איטי, כל פתרון-השמות נפל וכל האינטרנט "מת".
      */
     public static final String[] FAMILY_RESOLVERS = {
-        "94.140.14.15",    // AdGuard Family (primary)
-        "94.140.15.16",    // AdGuard Family (secondary)
         "1.1.1.3",         // Cloudflare for Families (malware + adult)
         "1.0.0.3",         // Cloudflare for Families (secondary)
+        "94.140.14.15",    // AdGuard Family
+        "94.140.15.16",    // AdGuard Family secondary
         "208.67.222.123",  // OpenDNS FamilyShield
-        "208.67.220.123"   // OpenDNS FamilyShield (secondary)
+        "208.67.220.123"   // OpenDNS FamilyShield secondary
     };
 
     /** ה-resolver המוגדר קודם, ואז שאר ה-family resolvers כגיבוי — בלי כפילויות. */
@@ -64,12 +65,17 @@ public final class VpnPolicy {
         int version = prefs.getInt(K_POLICY_VERSION, 0);
         if (version < POLICY_VERSION) {
             // Security migration from releases where full tunnel defaulted OFF.
-            prefs.edit()
+            SharedPreferences.Editor migration = prefs.edit()
                 .putBoolean(K_FULL_TUNNEL, true)
                 .putBoolean(K_BLOCK_QUIC, true)
                 .putBoolean(K_SNI_FILTER, true)
-                .putInt(K_POLICY_VERSION, POLICY_VERSION)
-                .apply();
+                .putInt(K_POLICY_VERSION, POLICY_VERSION);
+            String configuredDns = prefs.getString(K_UPSTREAM, "");
+            if (configuredDns == null || configuredDns.isEmpty() ||
+                    LEGACY_DEFAULT_UPSTREAM_DNS.equals(configuredDns)) {
+                migration.putString(K_UPSTREAM, DEFAULT_UPSTREAM_DNS);
+            }
+            migration.apply();
         }
         // Production policy is fail-closed. Keep this true even if a stale
         // preference from an older build still says false.
