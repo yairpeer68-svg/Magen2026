@@ -25,9 +25,9 @@ public class ShortFormMatchLogicTest {
         assertEquals("evidence_2plus",ShortFormMatchLogic.reason(f,"0","0","",one,new HashSet<>()));
     }
 
-    @Test public void strongEvidenceMayMatchAlone(){
+    @Test public void oneStrongEvidenceStillCannotMatchAlone(){
         ShortFormFingerprint f=new ShortFormFingerprint("","","",Arrays.asList("aaaaaaaabbbbbbbb"),Arrays.asList("aaaaaaaabbbbbbbb"));
-        assertEquals("strong_evidence",ShortFormMatchLogic.reason(f,"","","",new HashSet<>(),new HashSet<>(Arrays.asList("aaaaaaaabbbbbbbb"))));
+        assertNull(ShortFormMatchLogic.reason(f,"","","",new HashSet<>(Arrays.asList("aaaaaaaabbbbbbbb")),new HashSet<>(Arrays.asList("aaaaaaaabbbbbbbb"))));
     }
 
     @Test public void visualRequiresBothHashesClose(){

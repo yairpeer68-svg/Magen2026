@@ -16,7 +16,8 @@ public final class ShortFormMatchLogic {
         if (evidence == null) evidence = Collections.emptySet();
         if (strong == null) strong = Collections.emptySet();
         if (!fp.textHash.isEmpty() && fp.textHash.equals(text)) return "text_hash";
-        if (intersects(fp.strongEvidenceHashes, strong)) return "strong_evidence";
+        // Never auto-skip globally from one isolated metadata token. Two independent
+        // evidence hashes are required unless the whole normalized text matches.
         if (sharedCount(fp.evidenceHashes, evidence) >= 2) return "evidence_2plus";
         if (visualPair(fp.frameHash, fp.centerHash, frame, center)) return "visual_pair";
         return null;
@@ -30,12 +31,6 @@ public final class ShortFormMatchLogic {
             long c=Long.parseUnsignedLong(aCenter,16), d=Long.parseUnsignedLong(bCenter,16);
             return Long.bitCount(a^b)<=4 && Long.bitCount(c^d)<=4;
         } catch (Exception ignored) { return false; }
-    }
-
-    private static boolean intersects(List<String> a, Set<String> b) {
-        if (a == null || b == null || b.isEmpty()) return false;
-        for (String x : a) if (b.contains(x)) return true;
-        return false;
     }
 
     private static int sharedCount(List<String> a, Set<String> b) {
