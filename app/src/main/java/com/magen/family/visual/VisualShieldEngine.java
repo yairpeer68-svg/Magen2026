@@ -11,6 +11,7 @@ import android.view.Display;
 import android.view.accessibility.AccessibilityEvent;
 
 import com.magen.family.server.ServerEventReporter;
+import com.magen.family.server.ShortFormVerdictCache;
 
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Executors;
@@ -27,9 +28,11 @@ public final class VisualShieldEngine implements AutoCloseable {
     private static final long DUPLICATE_WINDOW_MS = 3_000L;
 
     public interface Callback { void onBlocked(String packageName, NsfwResult result); }
+    public interface GlobalMatchCallback { void onMatched(String packageName, ShortFormFingerprint fingerprint, String reason); }
 
     private final AccessibilityService service;
     private final Callback callback;
+    private final GlobalMatchCallback globalMatchCallback;
     private final ScheduledExecutorService worker = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "MagenVisualAI"); t.setDaemon(true); return t;
     });
@@ -49,8 +52,13 @@ public final class VisualShieldEngine implements AutoCloseable {
     private OnDeviceNsfwClassifier classifier;
 
     public VisualShieldEngine(AccessibilityService service, Callback callback) {
+        this(service, callback, null);
+    }
+
+    public VisualShieldEngine(AccessibilityService service, Callback callback, GlobalMatchCallback globalMatchCallback) {
         this.service = service;
         this.callback = callback;
+        this.globalMatchCallback = globalMatchCallback;
         worker.execute(() -> {
             try {
                 classifier = new OnDeviceNsfwClassifier(service.getApplicationContext());
@@ -127,6 +135,15 @@ public final class VisualShieldEngine implements AutoCloseable {
                             lastHashPackage = pkg;
                             lastHash = hash;
                             lastHashAt = now;
+
+                            // Manual global feedback is checked locally against signed cached
+                            // fingerprints. The screenshot never leaves the phone.
+                            ShortFormFingerprint fingerprint = ShortFormFingerprint.from(software, "");
+                            ShortFormVerdictCache.Match globalMatch = ShortFormVerdictCache.match(service, pkg, fingerprint);
+                            if (globalMatch != null && globalMatchCallback != null) {
+                                globalMatchCallback.onMatched(pkg, fingerprint, globalMatch.reason);
+                                return;
+                            }
 
                             NsfwResult result = classifyScreen(software, cfg);
                             VisualRuntimeState.scanCompleted();

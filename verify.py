@@ -466,7 +466,7 @@ def check_hardening_regressions():
     # Allowed settings screens must not fall through into normal content scanning.
     settings_guard = 'if (isSettingsPackage(pkg) || pkg.contains("vpndialog"))'
     guard_pos = acc.find(settings_guard)
-    filter_pos = acc.find('if (!((MagenApp) getApplication()).isFilterEnabled()) return;')
+    filter_pos = acc.find('if (!((MagenApp) getApplication()).isFilterEnabled())')
     if guard_pos < 0 or filter_pos < 0 or 'return;' not in acc[guard_pos:filter_pos]:
         error('הקשחה', 'מסך מערכת מורשה עלול ליפול למסלול סינון התוכן הרגיל')
 

@@ -88,7 +88,7 @@ public final class MagenApiClient {
     }
 
     private static boolean isOperationalIdempotentPost(String path){
-        return "/v1/heartbeat".equals(path) || "/v1/events".equals(path) || "/v1/incidents".equals(path) || "/v1/recover".equals(path);
+        return "/v1/heartbeat".equals(path) || "/v1/events".equals(path) || "/v1/incidents".equals(path) || "/v1/shortform/report".equals(path) || "/v1/recover".equals(path);
     }
 
     /** Authenticated raw download, used for the signed blocklist payload. */

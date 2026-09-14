@@ -77,6 +77,10 @@ public class MagenWatchdogJob extends JobService {
                     catch (Exception e) { Log.w(TAG, "policy sync: " + e.getMessage()); }
                     try { com.magen.family.server.HeartbeatManager.sendBlocking(app); }
                     catch (Exception e) { Log.w(TAG, "heartbeat: " + e.getMessage()); }
+                    try { com.magen.family.server.ShortFormFeedbackClient.flushPendingBlocking(app); }
+                    catch (Exception e) { Log.w(TAG, "shortform report flush: " + e.getMessage()); }
+                    try { com.magen.family.server.ShortFormVerdictCache.refreshBlocking(app); }
+                    catch (Exception e) { Log.w(TAG, "shortform snapshot: " + e.getMessage()); }
                 }
 
                 if (!MagenVpnService.isVpnRunning) {

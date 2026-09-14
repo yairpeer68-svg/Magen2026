@@ -6,6 +6,10 @@ import android.accessibilityservice.AccessibilityServiceInfo;
 import android.accessibilityservice.GestureDescription;
 import android.content.Intent;
 import android.graphics.Path;
+import android.graphics.Bitmap;
+import android.hardware.HardwareBuffer;
+import android.os.Build;
+import android.view.Display;
 import android.text.TextUtils;
 import android.util.Log;
 import android.view.accessibility.AccessibilityEvent;
@@ -19,15 +23,21 @@ import com.magen.family.filter.ContentFilter;
 import com.magen.family.server.RemoteIntelligenceClient;
 import com.magen.family.server.ServerEventReporter;
 import com.magen.family.server.ContentIncidentReporter;
+import com.magen.family.server.ShortFormFeedbackClient;
+import com.magen.family.server.ShortFormVerdictCache;
 import com.magen.family.ui.BlockedActivity;
 import com.magen.family.visual.MagenVisualCurtain;
 import com.magen.family.visual.NsfwResult;
 import com.magen.family.visual.VisualShieldEngine;
+import com.magen.family.visual.ShortFormFingerprint;
+import com.magen.family.visual.ShortFormReportOverlay;
 
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class MagenAccessibilityService extends AccessibilityService {
 
@@ -62,6 +72,11 @@ public class MagenAccessibilityService extends AccessibilityService {
     private ContentFilter contentFilter;
     private BehaviorAnalyzer behaviorAnalyzer;
     private VisualShieldEngine visualShield;
+    private ShortFormReportOverlay shortFormReportOverlay;
+    private final ExecutorService shortFormReportExecutor = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "MagenShortFormCapture"); t.setDaemon(true); return t;
+    });
+    private long lastGlobalShortFormCheckAt = 0L;
     private final ShortFormSkipGuard shortFormSkipGuard = new ShortFormSkipGuard();
     private final AhoCorasick matcher = new AhoCorasick();
     private final android.os.Handler mainHandler =
@@ -192,8 +207,11 @@ public class MagenAccessibilityService extends AccessibilityService {
         info.notificationTimeout = 100L;
         setServiceInfo(info);
 
-        visualShield = new VisualShieldEngine(this, (blockedPkg, result) ->
-            mainHandler.post(() -> blockVisual(blockedPkg, result)));
+        shortFormReportOverlay = new ShortFormReportOverlay(this, this::reportCurrentShortForm);
+        visualShield = new VisualShieldEngine(this,
+            (blockedPkg, result) -> mainHandler.post(() -> blockVisual(blockedPkg, result)),
+            (matchedPkg, fingerprint, reason) -> mainHandler.post(() ->
+                onGlobalShortFormMatch(matchedPkg, fingerprint, reason)));
 
         // The only reason for an accessibility setup scope is to turn the service ON.
         // Once connected, keeping that scope alive would also permit turning it OFF.
@@ -287,7 +305,10 @@ public class MagenAccessibilityService extends AccessibilityService {
             return;
         }
 
-        if (!((MagenApp) getApplication()).isFilterEnabled()) return;
+        if (!((MagenApp) getApplication()).isFilterEnabled()) {
+            if (shortFormReportOverlay != null) shortFormReportOverlay.hide();
+            return;
+        }
 
         // אל תסרוק UI מערכת/שולחן עבודה/Termux
         if (pkg.equals("com.termux") ||
@@ -328,7 +349,19 @@ public class MagenAccessibilityService extends AccessibilityService {
             return;
         }
 
-        if (MagenConfig.isWhitelisted(pkg)) return;
+        if (MagenConfig.isWhitelisted(pkg)) {
+            if (shortFormReportOverlay != null) shortFormReportOverlay.hide();
+            return;
+        }
+
+        boolean shortFormNow = isShortFormFeed(pkg);
+        if (shortFormReportOverlay != null) {
+            if (shortFormNow) shortFormReportOverlay.show(); else shortFormReportOverlay.hide();
+        }
+        if (shortFormNow) {
+            ShortFormVerdictCache.refreshAsync(this);
+            if (maybeAutoSkipGlobalFromText(pkg, event.getEventType())) return;
+        }
 
         // Visual filtering is independent from the query/URL: it classifies what is actually
         // rendered on screen. It is local-only; the VPS receives only decision metadata.
@@ -986,6 +1019,10 @@ public class MagenAccessibilityService extends AccessibilityService {
     }
 
     private boolean tryAutoSkipShortForm(String pkg, NsfwResult result) {
+        return tryAutoSkipShortForm(pkg, result, "visual");
+    }
+
+    private boolean tryAutoSkipShortForm(String pkg, NsfwResult result, String source) {
         if (!isShortFormFeed(pkg)) return false;
 
         long now = SystemClock.elapsedRealtime();
@@ -1012,7 +1049,7 @@ public class MagenAccessibilityService extends AccessibilityService {
 
         MagenVisualCurtain.showAutoSkip(this, result.label);
         ServerEventReporter.report(this, "SHORTFORM_AUTO_SKIP", "HIGH",
-            "package=" + pkg + " source=visual one_shot=true");
+            "package=" + pkg + " source=" + source + " one_shot=true");
 
         int width = Math.max(1, getResources().getDisplayMetrics().widthPixels);
         int height = Math.max(1, getResources().getDisplayMetrics().heightPixels);
@@ -1075,6 +1112,99 @@ public class MagenAccessibilityService extends AccessibilityService {
         // Safety hide in case an OEM never invokes the gesture callback. No retry is scheduled.
         mainHandler.postDelayed(MagenVisualCurtain::hide, 1_100L);
         return true;
+    }
+
+    private boolean maybeAutoSkipGlobalFromText(String pkg, int eventType) {
+        if (eventType != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED &&
+                eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return false;
+        long now = SystemClock.elapsedRealtime();
+        if (now - lastGlobalShortFormCheckAt < 350L) return false;
+        lastGlobalShortFormCheckAt = now;
+        AccessibilityNodeInfo root = getRootInActiveWindow();
+        if (root == null) return false;
+        try {
+            String visible = collectVisibleText(root, 2400);
+            ShortFormFingerprint fp = ShortFormFingerprint.textOnly(visible);
+            ShortFormVerdictCache.Match match = ShortFormVerdictCache.match(this, pkg, fp);
+            if (match == null) return false;
+            onGlobalShortFormMatch(pkg, fp, match.reason);
+            return true;
+        } finally { root.recycle(); }
+    }
+
+    private void onGlobalShortFormMatch(String pkg, ShortFormFingerprint fingerprint, String reason) {
+        if (!isShortFormFeed(pkg)) return;
+        ServerEventReporter.report(this, "SHORTFORM_GLOBAL_MATCH", "HIGH",
+            "package=" + pkg + " reason=" + reason);
+        NsfwResult reported = new NsfwResult("reported", 1.0f, 0f, 0f, 0f, 1.0f, 0f, -1);
+        if (!tryAutoSkipShortForm(pkg, reported, "global_report:" + reason)) {
+            hardBlockVisualIfStillForeground(pkg, reported);
+        }
+    }
+
+    private void reportCurrentShortForm() {
+        AccessibilityNodeInfo root = getRootInActiveWindow();
+        if (root == null || root.getPackageName() == null) return;
+        final String pkg;
+        final String visible;
+        try {
+            pkg = root.getPackageName().toString();
+            if (!isShortFormFeed(pkg)) return;
+            visible = collectVisibleText(root, 2600);
+        } finally { root.recycle(); }
+
+        if (shortFormReportOverlay != null) shortFormReportOverlay.hide();
+        mainHandler.postDelayed(() -> captureShortFormReport(pkg, visible), 120L);
+    }
+
+    private void captureShortFormReport(String pkg, String visible) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            finishShortFormReport(pkg, ShortFormFingerprint.textOnly(visible));
+            return;
+        }
+        try {
+            takeScreenshot(Display.DEFAULT_DISPLAY, shortFormReportExecutor,
+                new AccessibilityService.TakeScreenshotCallback() {
+                    @Override public void onSuccess(AccessibilityService.ScreenshotResult shot) {
+                        Bitmap software = null; HardwareBuffer hb = null;
+                        try {
+                            hb = shot.getHardwareBuffer();
+                            Bitmap hw = Bitmap.wrapHardwareBuffer(hb, shot.getColorSpace());
+                            if (hw != null) software = hw.copy(Bitmap.Config.ARGB_8888, false);
+                            ShortFormFingerprint fp = ShortFormFingerprint.from(software, visible);
+                            mainHandler.post(() -> finishShortFormReport(pkg, fp));
+                        } catch (Exception e) {
+                            ShortFormFingerprint fp = ShortFormFingerprint.textOnly(visible);
+                            mainHandler.post(() -> finishShortFormReport(pkg, fp));
+                        } finally {
+                            if (hb != null) try { hb.close(); } catch (Exception ignored) {}
+                            if (software != null && !software.isRecycled()) software.recycle();
+                        }
+                    }
+                    @Override public void onFailure(int errorCode) {
+                        ShortFormFingerprint fp = ShortFormFingerprint.textOnly(visible);
+                        mainHandler.post(() -> finishShortFormReport(pkg, fp));
+                    }
+                });
+        } catch (Exception e) {
+            finishShortFormReport(pkg, ShortFormFingerprint.textOnly(visible));
+        }
+    }
+
+    private void finishShortFormReport(String pkg, ShortFormFingerprint fp) {
+        if (fp == null || !fp.isUsable()) {
+            android.widget.Toast.makeText(this, "לא הצלחתי לזהות את הסרטון לדיווח", android.widget.Toast.LENGTH_SHORT).show();
+            return;
+        }
+        ShortFormVerdictCache.addLocal(this, pkg, fp);
+        ShortFormFeedbackClient.reportAsync(this, pkg, fp, uploaded ->
+            android.widget.Toast.makeText(this,
+                uploaded ? "הדיווח נשמר בשרת" : "הדיווח נשמר ויישלח כשיהיה חיבור",
+                android.widget.Toast.LENGTH_SHORT).show());
+        ServerEventReporter.report(this, "SHORTFORM_MANUAL_REPORT", "HIGH",
+            "package=" + pkg + " fingerprint_only=true");
+        NsfwResult reported = new NsfwResult("reported", 1.0f, 0f, 0f, 0f, 1.0f, 0f, -1);
+        if (!tryAutoSkipShortForm(pkg, reported, "manual_report")) hardBlockVisualIfStillForeground(pkg, reported);
     }
 
     private void autoScrollDebug(String stage, String pkg, String details) {
@@ -1301,6 +1431,8 @@ public class MagenAccessibilityService extends AccessibilityService {
     @Override
     public void onDestroy() {
         if (visualShield != null) { try { visualShield.close(); } catch (Exception ignored) {} visualShield = null; }
+        if (shortFormReportOverlay != null) { try { shortFormReportOverlay.close(); } catch (Exception ignored) {} shortFormReportOverlay = null; }
+        try { shortFormReportExecutor.shutdownNow(); } catch (Exception ignored) {}
         MagenVisualCurtain.hide();
         super.onDestroy();
         // כיבוי שירות הנגישות = ליבת הסינון מתה. TamperWatcher כבר מזהה את זה
