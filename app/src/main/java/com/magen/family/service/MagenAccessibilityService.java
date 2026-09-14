@@ -245,7 +245,13 @@ public class MagenAccessibilityService extends AccessibilityService {
         // advanced the feed. This is the main anti-loop signal: without it, Magen will not
         // issue another automatic swipe for the same pending item.
         if (event.getEventType() == AccessibilityEvent.TYPE_VIEW_SCROLLED) {
-            shortFormSkipGuard.markScrolled(pkg, SystemClock.elapsedRealtime());
+            long scrollNow = SystemClock.elapsedRealtime();
+            boolean awaitingBefore = shortFormSkipGuard.isAwaitingAdvance(pkg);
+            shortFormSkipGuard.markScrolled(pkg, scrollNow);
+            if (awaitingBefore && !shortFormSkipGuard.isAwaitingAdvance(pkg)) {
+                autoScrollDebug("SCROLL CONFIRMED", pkg,
+                    "event=TYPE_VIEW_SCROLLED class=" + className);
+            }
         }
 
         // ColorOS/Android may render the final "Disable accessibility service?"
@@ -932,6 +938,10 @@ public class MagenAccessibilityService extends AccessibilityService {
         // bad clip, Magen performs exactly one upward swipe. The state machine below refuses to
         // repeat that swipe until a real scroll event confirms the feed advanced, and a circuit
         // breaker stops a run of many unsafe clips from turning into an endless auto-scroll loop.
+        if (isShortFormFeed(pkg)) {
+            autoScrollDebug("DETECTED", pkg, result.compact());
+            autoScrollDebug("BLOCK", pkg, "visual verdict=" + result.label);
+        }
         if (tryAutoSkipShortForm(pkg, result)) return;
 
         hardBlockVisual(pkg, result);
@@ -943,6 +953,7 @@ public class MagenAccessibilityService extends AccessibilityService {
         long now = SystemClock.elapsedRealtime();
         long signature = currentShortFormSignature(pkg);
         ShortFormSkipGuard.Decision decision = shortFormSkipGuard.evaluate(pkg, signature, now);
+        autoScrollDebug("DECISION", pkg, "decision=" + decision.name() + " signature=" + signature);
 
         if (decision == ShortFormSkipGuard.Decision.COOLDOWN) {
             // The previous one-shot swipe is still in flight. Do not block and, critically, do
@@ -981,11 +992,14 @@ public class MagenAccessibilityService extends AccessibilityService {
                 @Override public void onCompleted(GestureDescription gestureDescription) {
                     ServerEventReporter.report(MagenAccessibilityService.this,
                         "SHORTFORM_AUTO_SKIP_COMPLETED", "INFO", "package=" + pkg);
+                    autoScrollDebug("GESTURE COMPLETED", pkg,
+                        "waiting for TYPE_VIEW_SCROLLED confirmation");
                     mainHandler.postDelayed(MagenVisualCurtain::hide, 650L);
                 }
 
                 @Override public void onCancelled(GestureDescription gestureDescription) {
                     shortFormSkipGuard.markGestureFailed(pkg, SystemClock.elapsedRealtime());
+                    autoScrollDebug("GESTURE CANCELLED", pkg, "Android cancelled dispatchGesture");
                     ServerEventReporter.report(MagenAccessibilityService.this,
                         "SHORTFORM_AUTO_SKIP_CANCELLED", "MEDIUM", "package=" + pkg);
                     mainHandler.post(() -> {
@@ -1002,14 +1016,42 @@ public class MagenAccessibilityService extends AccessibilityService {
         if (!accepted) {
             shortFormSkipGuard.markGestureFailed(pkg, SystemClock.elapsedRealtime());
             MagenVisualCurtain.hide();
+            autoScrollDebug("SWIPE REJECTED", pkg, "dispatchGesture returned false");
             ServerEventReporter.report(this, "SHORTFORM_AUTO_SKIP_REJECTED", "MEDIUM",
                 "package=" + pkg);
             return false;
         }
 
+        autoScrollDebug("SWIPE SENT", pkg,
+            "x=" + Math.round(x) + " y=" + Math.round(height * 0.78f)
+                + "->" + Math.round(height * 0.22f) + " duration=320ms");
+
+        // Diagnostic-only timeout: do not retry and do not change filtering policy.
+        mainHandler.postDelayed(() -> {
+            if (shortFormSkipGuard.isAwaitingAdvance(pkg)) {
+                autoScrollDebug("SCROLL TIMEOUT", pkg,
+                    "no TYPE_VIEW_SCROLLED confirmation within 5.2s");
+            }
+        }, 5_200L);
+
         // Safety hide in case an OEM never invokes the gesture callback. No retry is scheduled.
         mainHandler.postDelayed(MagenVisualCurtain::hide, 1_100L);
         return true;
+    }
+
+    private void autoScrollDebug(String stage, String pkg, String details) {
+        String safePkg = pkg == null ? "" : pkg;
+        String safeDetails = details == null ? "" : details;
+        String line = stage + " | package=" + safePkg
+            + (safeDetails.isEmpty() ? "" : " | " + safeDetails);
+        Log.d(TAG, "AUTO_SCROLL " + line);
+        com.magen.family.debug.DebugLog.log(this, "AUTO_SCROLL", line);
+        if (com.magen.family.BuildConfig.DEBUG) {
+            mainHandler.post(() -> android.widget.Toast.makeText(
+                MagenAccessibilityService.this,
+                "AUTO-SCROLL: " + stage,
+                android.widget.Toast.LENGTH_SHORT).show());
+        }
     }
 
     private void hardBlockVisualIfStillForeground(String pkg, NsfwResult result) {
