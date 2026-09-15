@@ -35,6 +35,16 @@ public final class MagenVisualCurtain {
             5_000L);
     }
 
+    /** Brief blocking curtain while an explicit native-search query is cleared in place. */
+    public static void showSearchBlocked(AccessibilityService service) {
+        showInternal(service,
+            "Magen חסם את החיפוש",
+            "השאילתה אינה מתאימה להגנה הפעילה",
+            true,
+            false,
+            1_200L);
+    }
+
     /**
      * Short-form feed mode: hide the unsafe frame while allowing the one-shot accessibility
      * gesture to pass through to the underlying app. The overlay is intentionally NOT touchable.

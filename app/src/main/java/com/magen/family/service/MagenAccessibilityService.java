@@ -20,6 +20,7 @@ import com.magen.family.MagenConfig;
 import com.magen.family.R;
 import com.magen.family.filter.AhoCorasick;
 import com.magen.family.filter.ContentFilter;
+import com.magen.family.filter.ExplicitSearchQuery;
 import com.magen.family.server.RemoteIntelligenceClient;
 import com.magen.family.server.ServerEventReporter;
 import com.magen.family.server.ContentIncidentReporter;
@@ -130,14 +131,18 @@ public class MagenAccessibilityService extends AccessibilityService {
         "org.telegram.messenger",
         "org.telegram.messenger.web",
         "org.thunderdog.challegram",
-        // אפליקציות חיפוש — הבעיה החמורה: חיפוש תמונות באפליקציית Google לא
-        // עבר דרך שום דפדפן, ולכן לא נסרק. עכשיו נסרק כמו אפליקציה חברתית
-        // (טקסט מוקלד + DOM), כך שהשאילתה "porn" והתוצאות נחסמות.
+        // אפליקציות חיפוש נסרקות בתדירות גבוהה. חסימת שאילתת Google native
+        // נעשית במסלול ייעודי על שדה החיפוש עצמו (לא על כל טקסט התוצאות).
         "com.google.android.googlequicksearchbox",   // אפליקציית Google
         "com.google.android.apps.searchlite",         // Google Go
         "com.sec.android.app.sbrowser",               // Samsung Internet (גם דפדפן)
         "com.pinterest",
         "com.google.android.apps.photos"              // חיפוש בגלריה
+    ));
+
+    private static final Set<String> NATIVE_GOOGLE_SEARCH_PACKAGES = new HashSet<>(Arrays.asList(
+        "com.google.android.googlequicksearchbox",
+        "com.google.android.apps.searchlite"
     ));
 
     private static final Set<String> TELEGRAM_PACKAGES = new HashSet<>(Arrays.asList(
@@ -364,6 +369,12 @@ public class MagenAccessibilityService extends AccessibilityService {
             if (maybeAutoSkipGlobalFromText(pkg, event.getEventType())) return;
         }
 
+        // Google app renders search results natively and often exposes no browser URL.
+        // Guard the actual editable search field before generic DOM/visual processing.
+        // This path never calls block()/HOME/lockout: it clears the query in-place, or falls
+        // back to one BACK action if the OEM refuses ACTION_SET_TEXT.
+        if (handleNativeGoogleSearchQuery(event, pkg)) return;
+
         // Visual filtering is independent from the query/URL: it classifies what is actually
         // rendered on screen. It is local-only; the VPS receives only decision metadata.
         if (visualShield != null && !MagenVisualCurtain.isShowing()) {
@@ -535,6 +546,77 @@ public class MagenAccessibilityService extends AccessibilityService {
                 }
             }
         }
+    }
+
+    private boolean handleNativeGoogleSearchQuery(AccessibilityEvent event, String pkg) {
+        if (event == null || !NATIVE_GOOGLE_SEARCH_PACKAGES.contains(pkg)) return false;
+        if (!com.magen.family.filter.FilterPolicy.isCategoryOn(this,
+                com.magen.family.filter.FilterPolicy.CAT_ADULT)) return false;
+
+        int type = event.getEventType();
+        if (type != AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED &&
+                type != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED &&
+                type != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return false;
+
+        AccessibilityNodeInfo candidate = null;
+        AccessibilityNodeInfo root = null;
+        try {
+            candidate = event.getSource();
+            if (!isLikelySearchInput(candidate)) {
+                if (candidate != null) { candidate.recycle(); candidate = null; }
+                root = getRootInActiveWindow();
+                candidate = findSearchInputNode(root, 0);
+            }
+            if (candidate == null) return false;
+            CharSequence value = candidate.getText();
+            String query = value == null ? "" : value.toString();
+            boolean useKeywords = com.magen.family.filter.FilterPolicy.useKeywords(this);
+            if (!ExplicitSearchQuery.shouldBlock(query, matcher, useKeywords)) return false;
+
+            com.magen.family.visual.MagenVisualCurtain.showSearchBlocked(this);
+            android.os.Bundle args = new android.os.Bundle();
+            args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, "");
+            boolean cleared = false;
+            try { cleared = candidate.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args); }
+            catch (RuntimeException ignored) {}
+            if (!cleared) performGlobalAction(GLOBAL_ACTION_BACK);
+
+            ServerEventReporter.report(this, "NATIVE_SEARCH_QUERY_BLOCKED", "HIGH",
+                "package=" + pkg + " cleared=" + cleared + " explicit=true");
+            com.magen.family.debug.DebugLog.log(this, "SEARCH_GUARD",
+                "blocked native Google query; cleared=" + cleared);
+            return true;
+        } finally {
+            if (candidate != null) try { candidate.recycle(); } catch (Exception ignored) {}
+            if (root != null) try { root.recycle(); } catch (Exception ignored) {}
+        }
+    }
+
+    private boolean isLikelySearchInput(AccessibilityNodeInfo node) {
+        if (node == null) return false;
+        CharSequence text = node.getText();
+        if (TextUtils.isEmpty(text) || text.length() > 300) return false;
+        if (node.isEditable()) return true;
+        String id = node.getViewIdResourceName();
+        String cls = node.getClassName() == null ? "" : node.getClassName().toString();
+        String lowId = id == null ? "" : id.toLowerCase(java.util.Locale.ROOT);
+        String lowCls = cls.toLowerCase(java.util.Locale.ROOT);
+        return (lowId.contains("search") || lowId.contains("query")) &&
+            (lowCls.contains("edit") || lowCls.contains("autocomplete"));
+    }
+
+    private AccessibilityNodeInfo findSearchInputNode(AccessibilityNodeInfo node, int depth) {
+        if (node == null || depth > MAX_SCAN_DEPTH) return null;
+        if (isLikelySearchInput(node)) return AccessibilityNodeInfo.obtain(node);
+        for (int i = 0; i < node.getChildCount(); i++) {
+            AccessibilityNodeInfo child = node.getChild(i);
+            if (child == null) continue;
+            AccessibilityNodeInfo found = null;
+            try { found = findSearchInputNode(child, depth + 1); }
+            finally { child.recycle(); }
+            if (found != null) return found;
+        }
+        return null;
     }
 
     /**
